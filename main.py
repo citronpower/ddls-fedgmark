@@ -381,6 +381,10 @@ def main():
                         help='number of epochs to train (default: 350)')
     parser.add_argument('--lr', type=float, default=0.01,
                         help='learning rate (default: 0.01)')
+    parser.add_argument('--n_train_D', type=int, default=1,
+                        help='training rounds')
+    parser.add_argument('--n_train_G', type=int, default=1,
+                        help='training rounds')   
     parser.add_argument('--seed', type=int, default=0,
                         help='random seed for splitting the dataset into 10 (default: 0)')
     parser.add_argument('--fold_idx', type=int, default=0,
@@ -498,13 +502,13 @@ def main():
                 global_model.load_state_dict(copy.deepcopy(global_weights))
                 global_to_sub(global_model, sub_model)
                 if id < args.num_corrupt: 
-                    for kk in range(1):
+                    for kk in range(args.n_train_D):
                         loss_sub = train_D_sub(args, global_model, sub_model, generator[id], optimizer_sub, id, device, train_graphs_trigger[id], 
                                         epoch, tag2index, bkd_gids_train[id], Ainput_train[id], 
                                         Xinput_train[id], nodenums_id[id], nodemax, 
                                         binaryfeat=False)
                     if epoch % args.n_epoch ==0:
-                        for kk in range(1):
+                        for kk in range(args.n_train_G):
                             loss, loss_poison, edges_len, nodes_len = train_G(args, global_model, sub_model, generator[id], optimizer_G[id], id, device, train_graphs_trigger[id], 
                                             epoch, tag2index, bkd_gids_train[id], Ainput_train[id], 
                                             Xinput_train[id], nodenums_id[id], nodemax, 
