@@ -499,14 +499,12 @@ def main():
                 global_to_sub(global_model, sub_model)
                 if id < args.num_corrupt: 
                     for kk in range(1):
-                        original_params = copy.deepcopy(sub_model[0].state_dict())
                         loss_sub = train_D_sub(args, global_model, sub_model, generator[id], optimizer_sub, id, device, train_graphs_trigger[id], 
                                         epoch, tag2index, bkd_gids_train[id], Ainput_train[id], 
                                         Xinput_train[id], nodenums_id[id], nodemax, 
                                         binaryfeat=False)
                     if epoch % args.n_epoch ==0:
                         for kk in range(1):
-                            original_params = copy.deepcopy(generator[id].state_dict())
                             loss, loss_poison, edges_len, nodes_len = train_G(args, global_model, sub_model, generator[id], optimizer_G[id], id, device, train_graphs_trigger[id], 
                                             epoch, tag2index, bkd_gids_train[id], Ainput_train[id], 
                                             Xinput_train[id], nodenums_id[id], nodemax, 
