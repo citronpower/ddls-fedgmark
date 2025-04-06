@@ -25,6 +25,10 @@ The most important arguments to reproduce the experiments are:
 1. --dataset [MUTAG|DD|PROTEINS|COLLAB]
 2. --attack [none|distillation|finetuning|onelayer]
 
+For example,
+
+`` python main.py --dataset PROTEINS --attack finetuning ``
+
 By default, the MUTAG dataset is used if the argument is left empty. Moreover, if you want to run the experiment on one DD or COLLAB, you should ensure you have enough ressources (and time...) available.
 By default, no attack is used (i.e. --attack none).
 
