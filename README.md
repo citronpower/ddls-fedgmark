@@ -1,4 +1,3 @@
-# FedGMark
 # FedGMark: Certifiably Robust Watermarking for Federated Graph Learning
 
 This is **NOT** the official implementation of "FedGMark: Certifiably Robust Watermarking for Federated Graph Learning"
@@ -14,12 +13,27 @@ Federated graph learning (FedGL) is an emerging learning paradigm to collaborati
 
 # Datasets
 
-Only the MUTAG dataset is provided through the repository because of the size of the others. However, you can use the "data_preprocessing.py" files to download and reformat the datasets to use them for FedGMark.
+Only the MUTAG dataset is provided through the repository because of the size of the others. However, you can use the "data_preprocessing.py" file to download and reformat the datasets to use them for FedGMark. You just have to launch the script as follows:
+
+``` python data_processing.py ```
+
 
 # Running the pipeline
 
-You should be able to run every experiments using the "main.py" files and the corresponding arguments.
-(I will complete this text later...)
+You should be able to run every experiments using the "main.py" files and the corresponding arguments. 
+The most important arguments to reproduce the experiments are:
+1. --dataset [MUTAG|DD|PROTEINS|COLLAB]
+2. --attack [none|distillation|finetuning|onelayer]
+
+By default, the MUTAG dataset is used if the argument is left empty. Moreover, if you want to run the experiment on one DD or COLLAB, you should ensure you have enough ressources (and time...) available.
+By default, no attack is used (i.e. --attack none).
+
+The authors of FedGMark provided many other arguments that you might want to tune according to your goal. In our case, we leave them with the default values. See the main.py file for more information about the other arguments.
+
+# Interprete the results
+
+While the script is running (main.py), you can observe the main accuracy (MA) as well as the watermark accuracy (WA) at each epoc as well as the final accuracies.
+If you applied an attack, the main accuracy and the watermark accuracy of the model under attack will also be printed once the model has been trained.
 
 ## Cite
 ```python
