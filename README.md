@@ -23,7 +23,7 @@ Only the MUTAG dataset is provided through the repository because of the size of
 You should be able to run every experiments using the "main.py" files and the corresponding arguments. 
 The most important arguments to reproduce the experiments are:
 1. --dataset [MUTAG|DD|PROTEINS|COLLAB]
-2. --attack [none|distillation|finetuning|onelayer]
+2. --attack [none|distillation|finetuning|layerperturb]
 
 For example,
 

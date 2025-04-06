@@ -324,6 +324,8 @@ def init_trigger(args, x, bkd_gids: list, bkd_nid_groups: list, init_feat: float
         graphs[idx].node_features = torch.Tensor(a.tolist())
             
     return graphs  
+
+# transfer the parameters from global model to submodels
 def global_to_sub(global_model,sub_model):
     global_model_state_dict = global_model.state_dict()
     sub_model_state_dict = {}
@@ -337,6 +339,7 @@ def global_to_sub(global_model,sub_model):
     for i in range(len(sub_model)):
         sub_model[i].load_state_dict(sub_model_state_dict[i])
 
+# transfer the parameters from submodels to global model
 def sub_to_global(global_model,sub_model):
     global_model_state_dict = global_model.state_dict()
     sub_model_state_dict = {}
@@ -361,7 +364,7 @@ def main():
     parser.add_argument('--backdoor', action='store_true', default=True,
                         help='Backdoor GNN')
     parser.add_argument('--attack', type=str, default="none",
-                        help='Type of attacks. Possible values are: {none, distillation, finetuning, onelayer} where none conducts no attack.')
+                        help='Type of attacks. Possible values are: {none, distillation, finetuning, layerperturb} where none conducts no attack.')
     parser.add_argument('--graphtype', type=str, default='ER',
                         help='type of graph generation')
     parser.add_argument('--prob', type=float, default=1.0,
@@ -373,7 +376,7 @@ def main():
     parser.add_argument('--T', type=int, default=4,
                         help='number of sub models')
     parser.add_argument('--num_corrupt', type=int, default=5,
-                        help="number of corrupt agents")
+                        help="number of corrupt agents") # clients that will watermark their local models
     parser.add_argument('--frac', type=float, default=0.1, 
                         help='fraction of training graphs are backdoored')
     parser.add_argument('--frac_epoch', type=float, default=0.5,
@@ -395,7 +398,7 @@ def main():
     parser.add_argument('--batch_size', type=int, default=128,  
                         help='input batch size for training (default: 32)')
     parser.add_argument('--iters_per_epoch', type=int, default=1,
-                        help='number of iterations per each epoch (default: 50)')
+                        help='number of iterations per each epoch (default: 50)') # no, I didn't change the default... The authors were just not consistent.
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train (default: 350)')
     parser.add_argument('--lr', type=float, default=0.01,
@@ -459,16 +462,16 @@ def main():
 
     print('input dim:', train_graphs[0].node_features.shape[1])
     
-    train_data_size = len(train_graphs) # total number of training graphs
-    client_data_size=int(train_data_size/(args.num_agents)) # number of training graphs per client
+    train_data_size = len(train_graphs) # Total number of training graphs
+    client_data_size=int(train_data_size/(args.num_agents)) # Number of training graphs per client
     split_data_size = [client_data_size for i in range(args.num_agents-1)]
     split_data_size.append(train_data_size-client_data_size*(args.num_agents-1))
-    train_graphs = torch.utils.data.random_split(train_graphs,split_data_size) # assign training graphs to clients randomly
+    train_graphs = torch.utils.data.random_split(train_graphs,split_data_size) # Assign training graphs to clients randomly
                   
     global_model = Discriminatort(args, args.num_layers, args.num_mlp_layers, train_graphs[0][0].node_features.shape[1],
                         args.hidden_dim, \
                         num_classes, args.final_dropout, args.learn_eps, args.graph_pooling_type,
-                        args.neighbor_pooling_type, device).to(device)
+                        args.neighbor_pooling_type, device).to(device) # Create global model
     optimizer_D = optim.Adam(global_model.parameters(), lr=args.lr)
     scheduler_D = optim.lr_scheduler.StepLR(optimizer_D, step_size=50, gamma=0.1)
 
@@ -480,7 +483,7 @@ def main():
     
     Ainput_test, Xinput_test = gen_input(test_graphs_trigger, test_backdoor, nodemax) 
     
-    with open(args.filenamebd, 'w+') as f:
+    with open(args.filenamebd, 'w+') as f: # Useless file, it is not used
         f.write("acc\n")
         bkd_gids_train = {}
         Ainput_train = {}
@@ -488,7 +491,7 @@ def main():
         nodenums_id = {}
         train_graphs_trigger = {}
         
-        for id in range(args.num_corrupt):           
+        for id in range(args.num_corrupt): # For every client taking part in the watermwarking, ...? 
             train_graphs_trigger[id] = copy.deepcopy(train_graphs[id])
             nodenums_id[id] = [len(train_graphs_trigger[id][idx].g.adj) for idx in range(len(train_graphs_trigger[id]))]
             bkd_gids_train[id] = bkd_cdd(train_graphs_trigger[id], args.target, args.dataset)
@@ -496,7 +499,7 @@ def main():
         global_weights = global_model.state_dict()
         generator = {}
         optimizer_G = {}
-        for cwg_id in range(args.num_corrupt):
+        for cwg_id in range(args.num_corrupt): # For every client taking part in the watermarking, we create a Customized Watermark Generator (CWG)
             generator[cwg_id]=cwg.Generator(nodemax, featdim, args.gtn_layernum, args.triggersize)
             optimizer_G[cwg_id]= optim.Adam(generator[cwg_id].parameters(), lr=args.lr)
 
@@ -504,54 +507,54 @@ def main():
         sub_hidden_dim = args.hidden_dim
         optimizer_sub = {}
         scheduler_sub = {}
-        for i in range(args.T):
+        for i in range(args.T): # Create each submodel (each client as multiple submodels), 
             sub_model[i] = Discriminatort1(args, args.num_layers, args.num_mlp_layers, train_graphs[0][0].node_features.shape[1],
                         sub_hidden_dim, \
                         num_classes, args.final_dropout, args.learn_eps, args.graph_pooling_type,
                         args.neighbor_pooling_type, device).to(device)
             optimizer_sub[i] = optim.Adam(sub_model[i].parameters(), lr=args.lr)
             scheduler_sub[i] = optim.lr_scheduler.StepLR(optimizer_sub[i], step_size=50, gamma=0.1)
-        for epoch in tqdm(range(1, args.epochs + 1)):
+        for epoch in tqdm(range(1, args.epochs + 1)): # Train global model (as well as the submodels)
             global_weights = global_model.state_dict() 
             local_weights, local_losses = [], []
             m = max(int(args.frac_epoch * args.num_agents), 1)
-            idxs_users = np.random.choice(range(args.num_agents), m, replace=False)
+            idxs_users = np.random.choice(range(args.num_agents), m, replace=False) # Select random clients for each epoch (authors don't say why? for simulation purposes?)
             print("idxs_users:", idxs_users)
-            for id in idxs_users: 
+            for id in idxs_users: # For each select client
                 global_model.load_state_dict(copy.deepcopy(global_weights))
                 global_to_sub(global_model, sub_model)
-                if id < args.num_corrupt: 
-                    for kk in range(args.n_train_D):
+                if id < args.num_corrupt: # If the given client is taking part to the watermarking
+                    for kk in range(args.n_train_D): # For n_train_D training rounds, trains the submodels on watermarked graphs 
                         loss_sub = train_D_sub(args, global_model, sub_model, generator[id], optimizer_sub, id, device, train_graphs_trigger[id], 
                                         epoch, tag2index, bkd_gids_train[id], Ainput_train[id], 
                                         Xinput_train[id], nodenums_id[id], nodemax, 
-                                        binaryfeat=False)
-                    if epoch % args.n_epoch ==0:
+                                        binaryfeat=False) 
+                    if epoch % args.n_epoch == 0: # Every n_epoch epoch, trains the generator model to produce watermarked graphs (??? isn't it too late? For the first epoc, the generator is not trained?)
                         for kk in range(args.n_train_G):
                             loss, loss_poison, edges_len, nodes_len = train_G(args, global_model, sub_model, generator[id], optimizer_G[id], id, device, train_graphs_trigger[id], 
                                             epoch, tag2index, bkd_gids_train[id], Ainput_train[id], 
                                             Xinput_train[id], nodenums_id[id], nodemax, 
-                                            binaryfeat=False)
+                                            binaryfeat=False) 
                 else:
-                    loss_sub = train_sub(args, global_model, sub_model, optimizer_sub, device, train_graphs[id], epoch, tag2index)
-                sub_to_global(global_model, sub_model)
+                    loss_sub = train_sub(args, global_model, sub_model, optimizer_sub, device, train_graphs[id], epoch, tag2index) # Traing submodels on clean (non-watermarked) graphs
+                sub_to_global(global_model, sub_model) 
                 l_weights = global_model.state_dict()
                 local_weights.append(l_weights)
             
             for sch_i in range(args.T):
                 scheduler_sub[sch_i].step() 
             global_weights = average_weights(local_weights)   
-            global_model.load_state_dict(global_weights)
+            global_model.load_state_dict(global_weights) # Update global model with the average weights of the submodels
             #----------------- Evaluation -----------------#
-            if epoch % args.n_test ==0:
+            if epoch % args.n_test == 0: # Each n_test epoch, we print the current accuracies (MA + WA)
                 global_to_sub(global_model, sub_model)
                 id = 0
                 args.is_test = 1
                 nodenums_test = [len(test_graphs[idx].g.adj) for idx in range(len(test_graphs))]
                 generator[id].eval() #
                 bkd_nid_groups = {}
-                graphs = copy.deepcopy(test_graphs)
-                for gid in test_backdoor:
+                graphs = copy.deepcopy(test_graphs) # Clean (not watermarked) graphs
+                for gid in test_backdoor: # Select some random watermarked graphs
                     if nodenums_test[gid] >= args.triggersize:
                         bkd_nid_groups[gid] = np.random.choice(nodenums_test[gid],args.triggersize,replace=False)
                     else:
@@ -600,7 +603,7 @@ def main():
 
 
     #----------------- Evaluation under attack -----------------#
-# if epoch == args.epochs:  # Only perform attack evaluation at the end of training
+    
     print("Evaluating model under attacks...")
     
     # Create a copy of the global model for attack testing
@@ -741,63 +744,13 @@ def main():
         acc_test_watermark_finetune = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
         print("Fine-tuned model accuracy on watermarked data (WA): %f" % acc_test_watermark_finetune)
     
-    elif args.attack == "onelayer": # doesn't act as expected... MA stays always the same... As if the perturbation wouldn't affect the performance
-        # One-layer perturbation attack
-        print("Performing one-layer perturbation attack...")
-        
-        # Copy the trained model
-        perturbed_model = copy.deepcopy(global_model)
-        noise_factor = 5 # percentage of standard deviation (values also tested: 0.05, 0.2, 0.5, 0.8 (result: no change in accuracy))
-
-        # Get all parameter keys
-        param_keys = list(perturbed_model.state_dict().keys())
-        
-        # Get all parameter keys that contain 'weight'
-        weight_keys = [k for k in param_keys if 'weight' in k]
-
-        if weight_keys:
-            # Choose a weight parameter (preferably from middle layers)
-            perturb_layer = weight_keys[len(weight_keys)//2]  # Pick middle layer
-            # Find corresponding bias if it exists
-            perturb_bias = perturb_layer.replace('weight', 'bias')
-            if perturb_bias not in param_keys:
-                perturb_bias = None
-            
-            print(f"Perturbed layer: {perturb_layer}")
-            
-            # Original weight perturbation
-            orig_weight = perturbed_model.state_dict()[perturb_layer].clone()
-
-            orig_norm = torch.norm(orig_weight).item()
-            print(f"Original weight norm: {orig_norm}")
-
-            noise_weight = noise_factor * torch.std(orig_weight) * torch.randn_like(orig_weight)
-            perturbed_model.state_dict()[perturb_layer].copy_(orig_weight + noise_weight)
-            
-            # After perturbation
-            new_norm = torch.norm(perturbed_model.state_dict()[perturb_layer]).item()
-            print(f"Perturbed weight norm: {new_norm}")
-            print(f"Difference: {new_norm - orig_norm}")
-
-            # Perturb bias if it exists
-            if perturb_bias:
-                print("Perturbe bias as well")
-                orig_bias = perturbed_model.state_dict()[perturb_bias].clone()
-                noise_bias = noise_factor * torch.std(orig_bias) * torch.randn_like(orig_bias)
-                perturbed_model.state_dict()[perturb_bias].copy_(orig_bias + noise_bias)
-            
-            # Evaluate the perturbed model
-            print("Evaluating perturbed model:")
-            global_to_sub(perturbed_model, sub_model)
-            
-            acc_test_clean_perturb = test_ensemble(args, sub_model, device, test_graphs, tag2index)
-            print("Perturbed model accuracy on clean test data (MA): %f" % acc_test_clean_perturb)
-            
-            bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]
-            acc_test_watermark_perturb = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
-            print("Perturbed model accuracy on watermarked data (WA): %f" % acc_test_watermark_perturb)
-        else:
-            print("No weight parameters found in model.")
+    # doesn't act as expected... MA stays always the same... As if the perturbation wouldn't affect the performance
+    # ...
+    elif args.attack == "layerperturb": 
+        # TODO
+        acc_test_clean_perturb = 0
+        acc_test_watermark_perturb = 0
+        pass
     
     elif args.attack == "none":
         # No attack, already evaluated in the previous section
@@ -815,7 +768,7 @@ def main():
         elif args.attack == "finetuning":
             attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_finetune}\n")
             attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_finetune}\n")
-        elif args.attack == "onelayer":
+        elif args.attack == "layerperturb":
             attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_perturb}\n")
             attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_perturb}\n")
         elif args.attack == "none":
