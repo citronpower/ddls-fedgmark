@@ -1,8 +1,10 @@
 # FedGMark
 # FedGMark: Certifiably Robust Watermarking for Federated Graph Learning
 
-This is the official implementation of "FedGMark: Certifiably Robust Watermarking for Federated Graph Learning"
+This is **NOT** the official implementation of "FedGMark: Certifiably Robust Watermarking for Federated Graph Learning"
 
+This repository is a fork of the official FedGMark used in the context of the Distributed Deep Learning System course of the University of Neuchâtel, Switzerland.
+In this work, we want to reproduce the experiments provided by the authors of the original paper and study the case where some clients are malicious.
 
 ## Introduction
 
