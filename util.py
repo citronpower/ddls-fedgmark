@@ -19,7 +19,7 @@ class S2VGraph(object):
         self.node_tags = node_tags
         self.neighbors = []
         self.node_features = 0
-        # self.edge_mat = 0
+        # self.edge_mat = 0 # LOUIS: COMMENTED BUT USED BELLOW? IS THE PART WITH edge_mat BELLOW USEFUL? OR IS IT NEVER USED?
 
         self.max_neighbor = 0
 
@@ -98,7 +98,7 @@ def load_data(dataset, degree_as_tag):
             g.neighbors[j].append(i)
         degree_list = []
         for i in range(len(g.g)):
-            g.neighbors[i] = g.neighbors[i]
+            g.neighbors[i] = g.neighbors[i] # LOUIS: WTF??
             degree_list.append(len(g.neighbors[i]))
         g.max_neighbor = max(degree_list)
 
@@ -107,7 +107,7 @@ def load_data(dataset, degree_as_tag):
         edges = [list(pair) for pair in g.g.edges()]
         edges.extend([[i, j] for j, i in edges])
 
-        deg_list = list(dict(g.g.degree(range(len(g.g)))).values())
+        deg_list = list(dict(g.g.degree(range(len(g.g)))).values()) # LOUIS: NOT USED?
         edge_mat_temp = torch.zeros(len(g.g),len(g.g))
         for [x_i,y_i] in edges:
             edge_mat_temp[x_i,y_i] = 1
@@ -156,6 +156,6 @@ def separate_data(graph_list, seed, fold_idx):
     train_graph_list = [graph_list[i] for i in train_idx]
     test_graph_list = [graph_list[i] for i in test_idx]
 
-    return train_graph_list, test_graph_list, test_idx
+    return train_graph_list, test_graph_list, test_idx # LOUIS: test_idx IS NEVER USED
 
 

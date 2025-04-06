@@ -244,7 +244,16 @@ def bkd_cdd_test(graphs, target_label):
 def bkd_cdd(graphs, target_label, dataset):
 
     if dataset == 'MUTAG':
-        num_backdoor_train_graphs = 1
+        num_backdoor_train_graphs = 1 # value given by the authors of the paper
+    elif dataset == 'PROTEINS':
+        num_backdoor_train_graphs = 1 # value copied from MUTAG. TODO: verify if the value makes sense for this dataset
+    elif dataset == 'DD':
+        num_backdoor_train_graphs = 1 # value copied from MUTAG. TODO: verify if the value makes sense for this dataset
+    elif dataset == 'COLLAB':
+        num_backdoor_train_graphs = 1 # value copied from MUTAG. TODO: verify if the value makes sense for this dataset
+    else:
+        raise Exception("Undefined number of backdoors for this dataset")
+
     temp_n = 0
     backdoor_graphs_indexes = []
     for graph_idx in range(len(graphs)):
@@ -256,7 +265,13 @@ def bkd_cdd(graphs, target_label, dataset):
 
 def test_ensemble(args, model, device, test_graphs, tag2index):
     if args.dataset == 'MUTAG':
-        num_labels = 2
+        num_labels = 2 # value given by the authors of the paper
+    if args.dataset == 'PROTEINS':
+        num_labels = 2 # value given in data_preprocessing or loading_data (i.e. num of classes)
+    if args.dataset == 'DD':
+        num_labels = 2 # value given in data_preprocessing or loading_data (i.e. num of classes)
+    if args.dataset == 'COLLAB':
+        num_labels = 3 # value given in data_preprocessing or loading_data (i.e. num of classes)
     output = {}
     pred = {}
     model[0].eval()
@@ -280,7 +295,7 @@ def test_ensemble(args, model, device, test_graphs, tag2index):
     correct = pred_ens.eq(labels.view_as(pred_ens)).sum().cpu().item()
     acc_test = correct / float(len(test_graphs))
 
-    print("accuracy test: %f" % acc_test)
+    
 
     return acc_test
 
@@ -342,9 +357,11 @@ def main():
     parser.add_argument('--port', type=str, default="acm4",
                         help='name of sever')
     parser.add_argument('--dataset', type=str, default="MUTAG",
-                        help='name of dataset (default: MUTAG)')
+                        help='name of dataset (default: MUTAG)') # COLLAB and DD, can't be trained with a free studio. You need more than 16GB RAM
     parser.add_argument('--backdoor', action='store_true', default=True,
                         help='Backdoor GNN')
+    parser.add_argument('--attack', type=str, default="none",
+                        help='Type of attacks. Possible values are: {none, distillation, finetuning, onelayer} where none conducts no attack.')
     parser.add_argument('--graphtype', type=str, default='ER',
                         help='type of graph generation')
     parser.add_argument('--prob', type=float, default=1.0,
@@ -431,22 +448,22 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(0)
     # graphs, num_classes, tag2index = load_data(args.dataset, args.degree_as_tag)
-    graphs, num_classes, tag2index = load_data(args.dataset, args.degree_as_tag)
+    graphs, num_classes, tag2index = load_data(args.dataset, args.degree_as_tag) # build list of networkx graphs based on the dataset (i.e. if we want to test with other datasets, we need them to have the same format as MUTAG.txt)
 
-    train_graphs, test_graphs, test_idx = separate_data(graphs, args.seed, args.fold_idx)
-    train_graphs1 = copy.deepcopy(train_graphs)
+    train_graphs, test_graphs, test_idx = separate_data(graphs, args.seed, args.fold_idx) # split list into training and test sets.
+    # train_graphs1 = copy.deepcopy(train_graphs) # NEVER USED?
     print('#train_graphs:', len(train_graphs), '#test_graphs:', len(test_graphs))
 
-    test_cleangraph_backdoor_labels = [graph for graph in test_graphs if graph.label == 1]
+    test_cleangraph_backdoor_labels = [graph for graph in test_graphs if graph.label == 1] # test_cleangraph_backdoor_labels is never used...
     print('#test clean graphs:', len(test_cleangraph_backdoor_labels))
 
     print('input dim:', train_graphs[0].node_features.shape[1])
     
-    train_data_size = len(train_graphs)
-    client_data_size=int(train_data_size/(args.num_agents))
+    train_data_size = len(train_graphs) # total number of training graphs
+    client_data_size=int(train_data_size/(args.num_agents)) # number of training graphs per client
     split_data_size = [client_data_size for i in range(args.num_agents-1)]
     split_data_size.append(train_data_size-client_data_size*(args.num_agents-1))
-    train_graphs = torch.utils.data.random_split(train_graphs,split_data_size)
+    train_graphs = torch.utils.data.random_split(train_graphs,split_data_size) # assign training graphs to clients randomly
                   
     global_model = Discriminatort(args, args.num_layers, args.num_mlp_layers, train_graphs[0][0].node_features.shape[1],
                         args.hidden_dim, \
@@ -567,17 +584,243 @@ def main():
                     bkd_dr_test[gid].node_tags = list(dict(bkd_dr_test[gid].g.degree).values())
 
                 acc_test_clean = test_ensemble(args, sub_model, device, test_graphs, tag2index)
+                print("accuracy test clean (MA): %f" % acc_test_clean)
                 bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]
                 test_watermark = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
+                print("accuracy test watermark (WA): %f" % test_watermark)
 
                 f.flush()
-            #scheduler.step()   
+            #scheduler.step()  
 
     f = open('./saved_model/' + str(args.graphtype) + '_' + str(args.dataset) + '_' + str(
             args.frac) + '_triggersize_' + str(args.triggersize), 'wb')
 
     pickle.dump(global_model, f)
     f.close()
+
+
+    #----------------- Evaluation under attack -----------------#
+# if epoch == args.epochs:  # Only perform attack evaluation at the end of training
+    print("Evaluating model under attacks...")
+    
+    # Create a copy of the global model for attack testing
+    attack_model = copy.deepcopy(global_model)
+    
+    # Test different types of attacks based on args.attack parameter
+    if args.attack == "distillation":
+        # Knowledge distillation attack
+        print("Performing distillation attack...")
+        
+        # Create a smaller student model with fewer parameters
+        student_model = Discriminatort(args, max(2, args.num_layers-2), args.num_mlp_layers, 
+                                      train_graphs[0][0].node_features.shape[1],
+                                      args.hidden_dim // 2, num_classes, args.final_dropout,
+                                      args.learn_eps, args.graph_pooling_type,
+                                      args.neighbor_pooling_type, device).to(device)
+        
+        # Train student model to mimic the teacher (global_model)
+        optimizer_student = optim.Adam(student_model.parameters(), lr=args.lr)
+        
+        # Distillation temperature
+        temp = 4.0
+        
+        for distill_epoch in range(30):  # Usually fewer epochs needed for distillation
+            # Get logits from teacher model
+            global_to_sub(global_model, sub_model)
+            
+            # Distillation on clean training data
+            for id in range(args.num_agents):
+                if id >= args.num_corrupt:  # Only use clean data for distillation
+                    for batch_idx in range(args.iters_per_epoch):
+                        selected_idx = np.random.permutation(len(train_graphs[id]))[:args.batch_size]
+                        batch_graph = [train_graphs[id][idx] for idx in selected_idx]
+                        
+                        # Get teacher outputs
+                        with torch.no_grad():
+                            teacher_outputs = []
+                            for i in range(len(sub_model)):
+                                if i == 0:
+                                    teacher_output = sub_model[i](batch_graph, i)
+                                else:
+                                    teacher_output = torch.add(teacher_output, sub_model[i](batch_graph, i))
+                            
+                            # Apply temperature scaling to soften probabilities
+                            teacher_outputs = F.softmax(teacher_output / temp, dim=1)
+                        
+                        # Train student to match teacher outputs
+                        student_model.train()
+                        optimizer_student.zero_grad()
+                        student_output = student_model(batch_graph)
+                        student_output_soft = F.log_softmax(student_output / temp, dim=1)
+                        
+                        # Compute distillation loss
+                        loss_distill = F.kl_div(student_output_soft, teacher_outputs, reduction='batchmean') * (temp * temp)
+                        
+                        # Also add standard cross-entropy loss with true labels
+                        labels = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
+                        loss_ce = criterion(student_output, labels)
+                        
+                        # Combined loss
+                        loss = 0.7 * loss_distill + 0.3 * loss_ce
+                        loss.backward()
+                        optimizer_student.step()
+            
+            if distill_epoch % 5 == 0:
+                print(f"Distillation epoch {distill_epoch}, Loss: {loss.item()}")
+        
+        # Evaluate the distilled model
+        print("Evaluating distilled model:")
+        
+        # Function to test with student model
+        def test_student_model(model, device, test_graphs):
+            model.eval()
+            output = []
+            idx = np.arange(len(test_graphs))
+            for i in range(0, len(test_graphs), 1):
+                sampled_idx = idx[i:i+1]
+                if len(sampled_idx) == 0:
+                    continue
+                output.append(model([test_graphs[j] for j in sampled_idx]).detach())
+            output = torch.cat(output, 0)
+            pred = output.max(1, keepdim=True)[1]
+            labels = torch.LongTensor([graph.label for graph in test_graphs]).to(device)
+            correct = pred.eq(labels.view_as(pred)).sum().cpu().item()
+            return correct / float(len(test_graphs))
+        
+        acc_test_clean_distill = test_student_model(student_model, device, test_graphs)
+        print("Distilled model accuracy on clean test data (MA): %f" % acc_test_clean_distill)
+        
+        bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]
+        acc_test_watermark_distill = test_student_model(student_model, device, bkd_dr_)
+        print("Distilled model accuracy on watermarked data (WA): %f" % acc_test_watermark_distill)
+    
+    elif args.attack == "finetuning":
+        # Fine-tuning attack
+        print("Performing fine-tuning attack...")
+        
+        # Copy the trained model
+        finetuned_model = copy.deepcopy(global_model)
+        optimizer_finetune = optim.Adam(finetuned_model.parameters(), lr=args.lr * 0.1)  # Lower learning rate
+        
+        # Fine-tune on a subset of clean data
+        clean_graphs = []
+        for id in range(args.num_agents):
+            if id >= args.num_corrupt:
+                clean_graphs.extend(train_graphs[id])
+        
+        # Randomly select 20% of clean data for fine-tuning
+        num_finetune = max(int(0.2 * len(clean_graphs)), 1)
+        finetune_indices = np.random.choice(len(clean_graphs), num_finetune, replace=False)
+        finetune_graphs = [clean_graphs[i] for i in finetune_indices]
+        
+        # Perform fine-tuning for fewer epochs
+        for finetune_epoch in range(10):
+            finetuned_model.train()
+            for batch_idx in range(args.iters_per_epoch * 2):  # More iterations per epoch
+                selected_idx = np.random.permutation(len(finetune_graphs))[:min(args.batch_size, len(finetune_graphs))]
+                batch_graph = [finetune_graphs[idx] for idx in selected_idx]
+                
+                optimizer_finetune.zero_grad()
+                output = finetuned_model(batch_graph)
+                labels = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
+                loss = criterion(output, labels)
+                loss.backward()
+                optimizer_finetune.step()
+            
+            if finetune_epoch % 2 == 0:
+                print(f"Fine-tuning epoch {finetune_epoch}, Loss: {loss.item()}")
+        
+        # Evaluate the fine-tuned model
+        print("Evaluating fine-tuned model:")
+        global_to_sub(finetuned_model, sub_model)
+        
+        acc_test_clean_finetune = test_ensemble(args, sub_model, device, test_graphs, tag2index)
+        print("Fine-tuned model accuracy on clean test data (MA): %f" % acc_test_clean_finetune)
+        
+        bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]
+        acc_test_watermark_finetune = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
+        print("Fine-tuned model accuracy on watermarked data (WA): %f" % acc_test_watermark_finetune)
+    
+    elif args.attack == "onelayer": # doesn't act as expected... MA stays always the same... As if the perturbation wouldn't affect the performance
+        # One-layer perturbation attack
+        print("Performing one-layer perturbation attack...")
+        
+        # Copy the trained model
+        perturbed_model = copy.deepcopy(global_model)
+        noise_factor = 5 # percentage of standard deviation (values also tested: 0.05, 0.2, 0.5, 0.8 (result: no change in accuracy))
+
+        # Get all parameter keys
+        param_keys = list(perturbed_model.state_dict().keys())
+        
+        # Get all parameter keys that contain 'weight'
+        weight_keys = [k for k in param_keys if 'weight' in k]
+
+        if weight_keys:
+            # Choose a weight parameter (preferably from middle layers)
+            perturb_layer = weight_keys[len(weight_keys)//2]  # Pick middle layer
+            # Find corresponding bias if it exists
+            perturb_bias = perturb_layer.replace('weight', 'bias')
+            if perturb_bias not in param_keys:
+                perturb_bias = None
+            
+            print(f"Perturbed layer: {perturb_layer}")
+            
+            # Original weight perturbation
+            orig_weight = perturbed_model.state_dict()[perturb_layer].clone()
+
+            orig_norm = torch.norm(orig_weight).item()
+            print(f"Original weight norm: {orig_norm}")
+
+            noise_weight = noise_factor * torch.std(orig_weight) * torch.randn_like(orig_weight)
+            perturbed_model.state_dict()[perturb_layer].copy_(orig_weight + noise_weight)
+            
+            # After perturbation
+            new_norm = torch.norm(perturbed_model.state_dict()[perturb_layer]).item()
+            print(f"Perturbed weight norm: {new_norm}")
+            print(f"Difference: {new_norm - orig_norm}")
+
+            # Perturb bias if it exists
+            if perturb_bias:
+                print("Perturbe bias as well")
+                orig_bias = perturbed_model.state_dict()[perturb_bias].clone()
+                noise_bias = noise_factor * torch.std(orig_bias) * torch.randn_like(orig_bias)
+                perturbed_model.state_dict()[perturb_bias].copy_(orig_bias + noise_bias)
+            
+            # Evaluate the perturbed model
+            print("Evaluating perturbed model:")
+            global_to_sub(perturbed_model, sub_model)
+            
+            acc_test_clean_perturb = test_ensemble(args, sub_model, device, test_graphs, tag2index)
+            print("Perturbed model accuracy on clean test data (MA): %f" % acc_test_clean_perturb)
+            
+            bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]
+            acc_test_watermark_perturb = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
+            print("Perturbed model accuracy on watermarked data (WA): %f" % acc_test_watermark_perturb)
+        else:
+            print("No weight parameters found in model.")
+    
+    elif args.attack == "none":
+        # No attack, already evaluated in the previous section
+        print("No attack performed, using previous evaluation results")
+    
+    else:
+        print(f"Unknown attack type: {args.attack}")
+    
+    # Write attack results to file
+    with open(args.filename + "_attack_" + args.attack + ".txt", 'w') as attack_file:
+        attack_file.write("Attack Type: " + args.attack + "\n")
+        if args.attack == "distillation":
+            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_distill}\n")
+            attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_distill}\n")
+        elif args.attack == "finetuning":
+            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_finetune}\n")
+            attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_finetune}\n")
+        elif args.attack == "onelayer":
+            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_perturb}\n")
+            attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_perturb}\n")
+        elif args.attack == "none":
+            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean}\n")
+            attack_file.write(f"Watermark Accuracy (WA): {test_watermark}\n")
 
 
 if __name__ == '__main__':

@@ -1,0 +1,7 @@
+# use data_proprocessing.py to generate them. They are too large to be hosted on github
+dataset/COLLAB/
+dataset/DD/
+dataset/PROTEINS/
+saved_model/
+__pycache__/
+output*
