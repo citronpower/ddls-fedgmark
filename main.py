@@ -364,7 +364,7 @@ def main():
     parser.add_argument('--backdoor', action='store_true', default=True,
                         help='Backdoor GNN')
     parser.add_argument('--attack', type=str, default="none",
-                        help='Type of attacks. Possible values are: {none, distillation, finetuning, layerperturb} where none conducts no attack.')
+                        help='Type of attacks. Possible values are: {none, distillation, finetuning, layerperturb} where "none" conducts no attack. They may be comma concatenated to apply multiple attacks against the global model.')
     parser.add_argument('--graphtype', type=str, default='ER',
                         help='type of graph generation')
     parser.add_argument('--prob', type=float, default=1.0,
@@ -609,8 +609,9 @@ def main():
     # Create a copy of the global model for attack testing
     attack_model = copy.deepcopy(global_model)
     
+    attacks = args.attack.split(",")
     # Test different types of attacks based on args.attack parameter
-    if args.attack == "distillation":
+    if "distillation" in attacks:
         # Knowledge distillation attack
         print("Performing distillation attack...")
         
@@ -697,7 +698,7 @@ def main():
         acc_test_watermark_distill = test_student_model(student_model, device, bkd_dr_)
         print("Distilled model accuracy on watermarked data (WA): %f" % acc_test_watermark_distill)
     
-    elif args.attack == "finetuning":
+    elif "finetuning" in attacks:
         # Fine-tuning attack
         print("Performing fine-tuning attack...")
         
@@ -746,7 +747,7 @@ def main():
     
     # doesn't act as expected... MA stays always the same... As if the perturbation wouldn't affect the performance
     # ...
-    elif args.attack == "layerperturb": 
+    elif "layerperturb" in attacks : 
         # TODO
         acc_test_clean_perturb = 0
         acc_test_watermark_perturb = 0
