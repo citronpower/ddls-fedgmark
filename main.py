@@ -315,7 +315,7 @@ def main():
             args, attack_model, clean_model, sub_model, test_graphs, test_backdoor, bkd_dr_test, tag2index, device
         )
         
-    elif args.attack == "suppression_online":
+    elif args.attack == "falsification":
         acc_test_clean, acc_test_watermark = run_malicious_training(
         args, attack_model, sub_model,
         train_graphs, test_graphs, test_backdoor, bkd_dr_test, tag2index, device,
@@ -344,7 +344,7 @@ def main():
         elif args.attack == "layerperturb":
             attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_perturb}\n")
             attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_perturb}\n")
-        elif args.attack == "suppression_online":
+        elif args.attack == "falsification":
             attack_file.write(f"Clean Accuracy (MA): {acc_test_clean:.6f}\n")
             attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark:.6f}\n")
 
