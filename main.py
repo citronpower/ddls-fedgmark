@@ -16,341 +16,16 @@ from graphcnnt import Discriminatort
 from graphcnnt1 import Discriminatort1
 import pickle
 import copy
+from attack_distillation import run_distillation_attack
+from attack_finetuning import run_finetuning_attack
+from attack_layerperturb import run_layerperturb_attack
+from main_malicious import run_malicious_training
+
 
 import matplotlib
 import matplotlib.pyplot as plt
 
 criterion = nn.CrossEntropyLoss()
-
-def average_weights(w):
-    """
-    Returns the average of the weights.
-    """
-    w_avg = copy.deepcopy(w[0])
-    for key in w_avg.keys():
-        for i in range(1, len(w)):
-            w_avg[key] += w[i][key]
-        w_avg[key] = torch.div(w_avg[key], len(w))
-    return w_avg
-def choose_sub_model(large_param_name):
-    if large_param_name == 'eps':
-        sub_i = 0
-    elif large_param_name[0:4]=='mlps':
-        if large_param_name[5:7] == '0.' or large_param_name[5:7] == '1.':
-            sub_i = 0
-        elif large_param_name[5:7] == '2.' or large_param_name[5:7] == '3.':
-            sub_i = 0
-        elif large_param_name[5:7] == '4.' or large_param_name[5:7] == '5.':
-            sub_i = 1
-        elif large_param_name[5:7] == '6.' or large_param_name[5:7] == '7.':
-            sub_i = 1
-        elif large_param_name[5:7] == '8.' or large_param_name[5:7] == '9.':
-            sub_i = 2
-        elif large_param_name[5:7] == '10' or large_param_name[5:7] == '11':
-            sub_i = 2
-        elif large_param_name[5:7] == '12' or large_param_name[5:7] == '13':
-            sub_i = 3
-        elif large_param_name[5:7] == '14' or large_param_name[5:7] == '15':
-            sub_i = 3
-    elif large_param_name[0:11] == 'batch_norms':
-        if large_param_name[12:14] == '0.' or large_param_name[12:14] == '1.':
-            sub_i = 0
-        elif large_param_name[12:14] == '2.' or large_param_name[12:14] == '3.':
-            sub_i = 0
-        elif large_param_name[12:14] == '4.' or large_param_name[12:14] == '5.':
-            sub_i = 1
-        elif large_param_name[12:14] == '6.' or large_param_name[12:14] == '7.':
-            sub_i = 1
-        elif large_param_name[12:14] == '8.' or large_param_name[12:14] == '9.':
-            sub_i = 2
-        elif large_param_name[12:14] == '10' or large_param_name[12:14] == '11':
-            sub_i = 2
-        elif large_param_name[12:14] == '12' or large_param_name[12:14] == '13':
-            sub_i = 3
-        elif large_param_name[12:14] == '14' or large_param_name[12:14] == '15':
-            sub_i = 3
-    elif large_param_name[0:18] == 'linears_prediction':
-        if large_param_name[19:21] == '0.' or large_param_name[19:21] == '1.':
-            sub_i = 0
-        elif large_param_name[19:21] == '2.' or large_param_name[19:21] == '3.':
-            sub_i = 0
-        elif large_param_name[19:21] == '4.': 
-            sub_i = 0
-        elif large_param_name[19:21] == '6.' or large_param_name[19:21] == '7.':
-            sub_i = 1
-        elif large_param_name[19:21] == '8.' or large_param_name[19:21] == '9.':
-            sub_i = 1
-        elif large_param_name[19:21] == '5.': 
-            sub_i = 1
-        elif large_param_name[19:21] == '12' or large_param_name[19:21] == '13':
-            sub_i = 2
-        elif large_param_name[19:21] == '14' or large_param_name[19:21] == '10':
-            sub_i = 2
-        elif large_param_name[19:21] == '11': 
-            sub_i = 2
-        elif large_param_name[19:21] == '18' or large_param_name[19:21] == '19':
-            sub_i = 3
-        elif large_param_name[19:21] == '17' or large_param_name[19:21] == '16':
-            sub_i = 3
-        elif large_param_name[19:21] == '15':
-            sub_i = 3
-    return sub_i
-
-def train_sub(args, global_model, sub_model, optimizer, device, train_graphs, epoch, tag2index):
-    total_iters = args.iters_per_epoch
-
-    loss_accum = 0
-    for pos in range(total_iters):
-        selected_idx = np.random.permutation(len(train_graphs))[:args.batch_size]
-
-        batch_graph = [train_graphs[idx] for idx in selected_idx]
-        labels = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
-        loss = 0
-        for i in range(len(sub_model)):
-            sub_model[i].train()
-            output = sub_model[i](batch_graph, i)
-            loss = criterion(output, labels)
-
-            if optimizer[i] is not None:
-                optimizer[i].zero_grad()
-                loss.backward()
-                optimizer[i].step()                     
-    return loss
-
-def train_G(args, model, sub_model, generator, optimizer_G, id, device, train_graphs_trigger, epoch, tag2index, bkd_gids_train, Ainput_train, Xinput_train, nodenums_id, nodemax, binaryfeat=False):
-    for i in range(len(sub_model)):
-        sub_model[i].eval()
-    generator.train()
-    optimizer_G.zero_grad()
-    
-    total_iters = args.iters_per_epoch
-
-    for pos in range(total_iters):
-        selected_idx = bkd_gids_train 
-        
-        batch_graph = [train_graphs_trigger[idx] for idx in selected_idx]
-
-        bkd_nid_groups = {}
-        graphs = copy.deepcopy(train_graphs_trigger)
-        for gid in bkd_gids_train:
-            if nodenums_id[gid] >= args.triggersize:
-                bkd_nid_groups[gid] = np.random.choice(nodenums_id[gid],args.triggersize,replace=False)
-            else:
-                bkd_nid_groups[gid] = np.random.choice(nodenums_id[gid],args.triggersize,replace=True)
-            
-        init_dr = init_trigger(
-                        args, graphs, bkd_gids_train, bkd_nid_groups, 0.0)
-        bkd_dr = copy.deepcopy(init_dr)
-        topomask, featmask = gen_mask(
-                        graphs[0].node_features.shape[1], nodemax, bkd_dr, bkd_gids_train, bkd_nid_groups)
-        Ainput_trigger, Xinput_trigger = gen_input(bkd_dr, bkd_gids_train, nodemax)
-    
-        output_graph, trigger_group, edges_len, nodes_len, rst_bkdA  = generator(args, id, train_graphs_trigger, bkd_dr, Ainput_trigger, topomask, bkd_nid_groups, bkd_gids_train, Ainput_train, Xinput_train, nodenums_id, nodemax, args.is_Customized, args.is_test, args.triggersize, device=torch.device('cpu'), binaryfeat=False)
-
-        for gid in bkd_gids_train:
-            output_graph[gid].edge_mat = torch.add(init_dr[gid].edge_mat, rst_bkdA[gid][:nodenums_id[gid], :nodenums_id[gid]]) 
-            for i in range(nodenums_id[gid]):
-                for j in range(nodenums_id[gid]):
-                    if rst_bkdA[gid][i][j] == 1:
-                        output_graph[gid].g.add_edge(i, j)
-            output_graph[gid].node_tags = list(dict(output_graph[gid].g.degree).values())   
-
-        for i in range(len(sub_model)):
-            if i == 0:
-                output = sub_model[i](output_graph, i)
-            else: 
-                output = torch.add(output, sub_model[i](output_graph, i))
-        output_graph_poison = torch.stack([output[idx] for idx in selected_idx])
-
-        labels_poison = torch.LongTensor([args.target for idx in selected_idx]).to(device)
-        loss_poison = criterion(output_graph_poison, labels_poison)    
-    loss_poison.backward()
-    optimizer_G.step()
-    average_loss = 0
-    aver_loss_poison = 0
-    return average_loss, aver_loss_poison, edges_len, nodes_len
-
-def train_D_sub(args, global_model, sub_model, generator, optimizer, id, device, train_graphs, epoch, tag2index, bkd_gids_train, Ainput_train, Xinput_train, nodenums_id, nodemax, binaryfeat=False):
-    for i in range(len(sub_model)):
-        sub_model[i].train()
-    total_iters = args.iters_per_epoch
-    generator.eval()
-
-    selected_idx = bkd_gids_train
-    batch_graph = [train_graphs[idx] for idx in selected_idx]
-
-    bkd_nid_groups = {}
-    graphs = copy.deepcopy(train_graphs)
-    for gid in bkd_gids_train:
-        if nodenums_id[gid] >= args.triggersize:
-            bkd_nid_groups[gid] = np.random.choice(nodenums_id[gid],args.triggersize,replace=False)
-        else:
-            bkd_nid_groups[gid] = np.random.choice(nodenums_id[gid],args.triggersize,replace=True)
-        
-    init_dr = init_trigger(
-                    args, graphs, bkd_gids_train, bkd_nid_groups, 0.0)
-    bkd_dr = copy.deepcopy(init_dr)
-    topomask, featmask = gen_mask(
-                    graphs[0].node_features.shape[1], nodemax, bkd_dr, bkd_gids_train, bkd_nid_groups)
-    Ainput_trigger, Xinput_trigger = gen_input(bkd_dr, bkd_gids_train, nodemax)
-    
-    output_graph, _, _, _, rst_bkdA = generator(args, id, train_graphs, bkd_dr, Ainput_trigger, topomask, bkd_nid_groups, bkd_gids_train, Ainput_train, Xinput_train, nodenums_id, nodemax, args.is_Customized, args.is_test, args.triggersize, device=torch.device('cpu'), binaryfeat=False)#.detach()
-    
-    for gid in bkd_gids_train:
-        output_graph[gid].edge_mat = torch.add(init_dr[gid].edge_mat, rst_bkdA[gid][:nodenums_id[gid], :nodenums_id[gid]]).detach() 
-        for i in range(nodenums_id[gid]):
-            for j in range(nodenums_id[gid]):
-                if rst_bkdA[gid][i][j] == 1:
-                    output_graph[gid].g.add_edge(i, j)
-        output_graph[gid].node_tags = list(dict(output_graph[gid].g.degree).values())
-
-    loss_accum = 0
-    #for pos in pbar:
-    for pos in range(total_iters):
-        for i in range(len(sub_model)):
-            
-            labels = torch.LongTensor([graph.label for graph in output_graph]).to(device)
-            # loss = 0
-            output = sub_model[i](output_graph, i)
-
-            # compute loss
-            loss = criterion(output, labels)
-
-            if optimizer[i] is not None:
-                optimizer[i].zero_grad()
-                loss.backward()
-                optimizer[i].step()     
-    return loss
-def pass_data_iteratively1(model, graphs, model_id, minibatch_size=1):
-    model.eval()
-    output = []
-    idx = np.arange(len(graphs))
-    for i in range(0, len(graphs), minibatch_size):
-        sampled_idx = idx[i:i + minibatch_size]
-        if len(sampled_idx) == 0:
-            continue
-        output.append(model([graphs[j] for j in sampled_idx], model_id).detach())
-    return torch.cat(output, 0)   
-
-def bkd_cdd_test(graphs, target_label):
-    
-    backdoor_graphs_indexes = []
-    for graph_idx in range(len(graphs)):
-        if graphs[graph_idx].label != target_label: # != target_label:
-            backdoor_graphs_indexes.append(graph_idx)
-        
-    return backdoor_graphs_indexes
-
-def bkd_cdd(graphs, target_label, dataset):
-
-    if dataset == 'MUTAG':
-        num_backdoor_train_graphs = 1 # value given by the authors of the paper
-    elif dataset == 'PROTEINS':
-        num_backdoor_train_graphs = 1 # value copied from MUTAG. TODO: verify if the value makes sense for this dataset
-    elif dataset == 'DD':
-        num_backdoor_train_graphs = 1 # value copied from MUTAG. TODO: verify if the value makes sense for this dataset
-    elif dataset == 'COLLAB':
-        num_backdoor_train_graphs = 1 # value copied from MUTAG. TODO: verify if the value makes sense for this dataset
-    else:
-        raise Exception("Undefined number of backdoors for this dataset")
-
-    temp_n = 0
-    backdoor_graphs_indexes = []
-    for graph_idx in range(len(graphs)):
-        if graphs[graph_idx].label != target_label and temp_n < num_backdoor_train_graphs:
-            backdoor_graphs_indexes.append(graph_idx)
-            temp_n += 1
-           
-    return backdoor_graphs_indexes
-
-def test_ensemble(args, model, device, test_graphs, tag2index):
-    if args.dataset == 'MUTAG':
-        num_labels = 2 # value given by the authors of the paper
-    if args.dataset == 'PROTEINS':
-        num_labels = 2 # value given in data_preprocessing or loading_data (i.e. num of classes)
-    if args.dataset == 'DD':
-        num_labels = 2 # value given in data_preprocessing or loading_data (i.e. num of classes)
-    if args.dataset == 'COLLAB':
-        num_labels = 3 # value given in data_preprocessing or loading_data (i.e. num of classes)
-    output = {}
-    pred = {}
-    model[0].eval()
-    pred_ens_g_tmp = pass_data_iteratively1(model[0], test_graphs, 0)
-    for i in range(len(model)):
-        model[i].eval()
-        output[i] = pass_data_iteratively1(model[i], test_graphs, i)
-        if i > 0 :
-            pred_ens_g_tmp += output[i]
-        pred[i] = output[i].max(1, keepdim=True)[1]
-    pred_ens = pred[0]
-    sub_test_label = {}
-    for i in range(len(pred[i])):
-        for k in range(num_labels):
-            sub_test_label[k] = 0
-        for j in range(len(model)):
-            sub_test_label[int(pred[j][i])] += 1
-        pred_ens[i] = max(sub_test_label, key=sub_test_label.get)
-
-    labels = torch.LongTensor([graph.label for graph in test_graphs]).to(device)
-    correct = pred_ens.eq(labels.view_as(pred_ens)).sum().cpu().item()
-    acc_test = correct / float(len(test_graphs))
-
-    
-
-    return acc_test
-
-def init_trigger(args, x, bkd_gids: list, bkd_nid_groups: list, init_feat: float):
-    if init_feat == None:
-        init_feat = - 1
-        print('init feat == None, transferred into -1')
-
-    graphs = copy.deepcopy(x)   
-    for idx in bkd_gids:
-        for i in bkd_nid_groups[idx]:  
-            for j in bkd_nid_groups[idx]:
-                if graphs[idx].edge_mat[i, j] == 1:
-                    # edges.remove([i, j])
-                    graphs[idx].edge_mat[i, j] = 0
-                if (i, j) in graphs[idx].g.edges():
-                    graphs[idx].g.remove_edge(i, j)
-        
-        assert args.target is not None
-        graphs[idx].label = args.target
-        graphs[idx].node_tags = list(dict(graphs[idx].g.degree).values()) 
-        # change features in-place
-        featdim = graphs[idx].node_features.shape[1]
-        a = np.array(graphs[idx].node_features)
-        a[bkd_nid_groups[idx]] = np.ones((len(bkd_nid_groups[idx]), featdim)) * init_feat
-        graphs[idx].node_features = torch.Tensor(a.tolist())
-            
-    return graphs  
-
-# transfer the parameters from global model to submodels
-def global_to_sub(global_model,sub_model):
-    global_model_state_dict = global_model.state_dict()
-    sub_model_state_dict = {}
-    for i in range(len(sub_model)):
-        sub_model_state_dict[i] = sub_model[i].state_dict()
-
-    for large_param_name, large_param in global_model.named_parameters():
-        sub_i = choose_sub_model(large_param_name)        
-        sub_model_state_dict[sub_i][large_param_name].data.copy_(global_model_state_dict[large_param_name].data)
-    
-    for i in range(len(sub_model)):
-        sub_model[i].load_state_dict(sub_model_state_dict[i])
-
-# transfer the parameters from submodels to global model
-def sub_to_global(global_model,sub_model):
-    global_model_state_dict = global_model.state_dict()
-    sub_model_state_dict = {}
-    for i in range(len(sub_model)):
-        sub_model_state_dict[i] = sub_model[i].state_dict()
-
-    for large_param_name, large_param in global_model.named_parameters():
-        sub_i = choose_sub_model(large_param_name)
-        global_model_state_dict[large_param_name].data.copy_(sub_model_state_dict[sub_i][large_param_name].data)
-    
-    global_model.load_state_dict(global_model_state_dict)
 
 def main():
     # Training settings
@@ -364,7 +39,7 @@ def main():
     parser.add_argument('--backdoor', action='store_true', default=True,
                         help='Backdoor GNN')
     parser.add_argument('--attack', type=str, default="none",
-                        help='Type of attacks. Possible values are: {none, distillation, finetuning, layerperturb} where "none" conducts no attack. They may be comma concatenated to apply multiple attacks against the global model.')
+                        help='Type of attacks. Possible values are: {none, distillation, finetuning, layerperturb} where none conducts no attack.')
     parser.add_argument('--graphtype', type=str, default='ER',
                         help='type of graph generation')
     parser.add_argument('--prob', type=float, default=1.0,
@@ -401,6 +76,8 @@ def main():
                         help='number of iterations per each epoch (default: 50)') # no, I didn't change the default... The authors were just not consistent.
     parser.add_argument('--epochs', type=int, default=100,
                         help='number of epochs to train (default: 350)')
+    parser.add_argument('--perturb_depth', type=int, default=1,
+                    help='number of final layers to perturb per submodel')
     parser.add_argument('--lr', type=float, default=0.01,
                         help='learning rate (default: 0.01)')
     parser.add_argument('--n_train_D', type=int, default=1,
@@ -441,6 +118,9 @@ def main():
                         help='output file')
     parser.add_argument('--filenamebd', type=str, default="output_bd",
                         help='output backdoor file')
+    parser.add_argument('--malicious_frac', type=float, default=0.3,
+                    help='Fraction of malicious clients that suppress watermark (0-1)')
+
     args = parser.parse_args()
 
     cpu = torch.device('cpu')
@@ -609,149 +289,41 @@ def main():
     # Create a copy of the global model for attack testing
     attack_model = copy.deepcopy(global_model)
     
-    attacks = args.attack.split(",")
+    clean_model = Discriminatort(
+        args, args.num_layers, args.num_mlp_layers, 
+        train_graphs[0][0].node_features.shape[1],
+        args.hidden_dim, num_classes,
+        args.final_dropout, args.learn_eps,
+        args.graph_pooling_type, args.neighbor_pooling_type,
+        device
+    ).to(device)
+    
     # Test different types of attacks based on args.attack parameter
-    if "distillation" in attacks:
-        # Knowledge distillation attack
-        print("Performing distillation attack...")
-        
-        # Create a smaller student model with fewer parameters
-        student_model = Discriminatort(args, max(2, args.num_layers-2), args.num_mlp_layers, 
-                                      train_graphs[0][0].node_features.shape[1],
-                                      args.hidden_dim // 2, num_classes, args.final_dropout,
-                                      args.learn_eps, args.graph_pooling_type,
-                                      args.neighbor_pooling_type, device).to(device)
-        
-        # Train student model to mimic the teacher (global_model)
-        optimizer_student = optim.Adam(student_model.parameters(), lr=args.lr)
-        
-        # Distillation temperature
-        temp = 4.0
-        
-        for distill_epoch in range(30):  # Usually fewer epochs needed for distillation
-            # Get logits from teacher model
-            global_to_sub(global_model, sub_model)
-            
-            # Distillation on clean training data
-            for id in range(args.num_agents):
-                if id >= args.num_corrupt:  # Only use clean data for distillation
-                    for batch_idx in range(args.iters_per_epoch):
-                        selected_idx = np.random.permutation(len(train_graphs[id]))[:args.batch_size]
-                        batch_graph = [train_graphs[id][idx] for idx in selected_idx]
-                        
-                        # Get teacher outputs
-                        with torch.no_grad():
-                            teacher_outputs = []
-                            for i in range(len(sub_model)):
-                                if i == 0:
-                                    teacher_output = sub_model[i](batch_graph, i)
-                                else:
-                                    teacher_output = torch.add(teacher_output, sub_model[i](batch_graph, i))
-                            
-                            # Apply temperature scaling to soften probabilities
-                            teacher_outputs = F.softmax(teacher_output / temp, dim=1)
-                        
-                        # Train student to match teacher outputs
-                        student_model.train()
-                        optimizer_student.zero_grad()
-                        student_output = student_model(batch_graph)
-                        student_output_soft = F.log_softmax(student_output / temp, dim=1)
-                        
-                        # Compute distillation loss
-                        loss_distill = F.kl_div(student_output_soft, teacher_outputs, reduction='batchmean') * (temp * temp)
-                        
-                        # Also add standard cross-entropy loss with true labels
-                        labels = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
-                        loss_ce = criterion(student_output, labels)
-                        
-                        # Combined loss
-                        loss = 0.7 * loss_distill + 0.3 * loss_ce
-                        loss.backward()
-                        optimizer_student.step()
-            
-            if distill_epoch % 5 == 0:
-                print(f"Distillation epoch {distill_epoch}, Loss: {loss.item()}")
-        
-        # Evaluate the distilled model
-        print("Evaluating distilled model:")
-        
-        # Function to test with student model
-        def test_student_model(model, device, test_graphs):
-            model.eval()
-            output = []
-            idx = np.arange(len(test_graphs))
-            for i in range(0, len(test_graphs), 1):
-                sampled_idx = idx[i:i+1]
-                if len(sampled_idx) == 0:
-                    continue
-                output.append(model([test_graphs[j] for j in sampled_idx]).detach())
-            output = torch.cat(output, 0)
-            pred = output.max(1, keepdim=True)[1]
-            labels = torch.LongTensor([graph.label for graph in test_graphs]).to(device)
-            correct = pred.eq(labels.view_as(pred)).sum().cpu().item()
-            return correct / float(len(test_graphs))
-        
-        acc_test_clean_distill = test_student_model(student_model, device, test_graphs)
-        print("Distilled model accuracy on clean test data (MA): %f" % acc_test_clean_distill)
-        
-        bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]
-        acc_test_watermark_distill = test_student_model(student_model, device, bkd_dr_)
-        print("Distilled model accuracy on watermarked data (WA): %f" % acc_test_watermark_distill)
     
-    elif "finetuning" in attacks:
-        # Fine-tuning attack
-        print("Performing fine-tuning attack...")
-        
-        # Copy the trained model
-        finetuned_model = copy.deepcopy(global_model)
-        optimizer_finetune = optim.Adam(finetuned_model.parameters(), lr=args.lr * 0.1)  # Lower learning rate
-        
-        # Fine-tune on a subset of clean data
-        clean_graphs = []
-        for id in range(args.num_agents):
-            if id >= args.num_corrupt:
-                clean_graphs.extend(train_graphs[id])
-        
-        # Randomly select 20% of clean data for fine-tuning
-        num_finetune = max(int(0.2 * len(clean_graphs)), 1)
-        finetune_indices = np.random.choice(len(clean_graphs), num_finetune, replace=False)
-        finetune_graphs = [clean_graphs[i] for i in finetune_indices]
-        
-        # Perform fine-tuning for fewer epochs
-        for finetune_epoch in range(10):
-            finetuned_model.train()
-            for batch_idx in range(args.iters_per_epoch * 2):  # More iterations per epoch
-                selected_idx = np.random.permutation(len(finetune_graphs))[:min(args.batch_size, len(finetune_graphs))]
-                batch_graph = [finetune_graphs[idx] for idx in selected_idx]
-                
-                optimizer_finetune.zero_grad()
-                output = finetuned_model(batch_graph)
-                labels = torch.LongTensor([graph.label for graph in batch_graph]).to(device)
-                loss = criterion(output, labels)
-                loss.backward()
-                optimizer_finetune.step()
-            
-            if finetune_epoch % 2 == 0:
-                print(f"Fine-tuning epoch {finetune_epoch}, Loss: {loss.item()}")
-        
-        # Evaluate the fine-tuned model
-        print("Evaluating fine-tuned model:")
-        global_to_sub(finetuned_model, sub_model)
-        
-        acc_test_clean_finetune = test_ensemble(args, sub_model, device, test_graphs, tag2index)
-        print("Fine-tuned model accuracy on clean test data (MA): %f" % acc_test_clean_finetune)
-        
-        bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]
-        acc_test_watermark_finetune = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
-        print("Fine-tuned model accuracy on watermarked data (WA): %f" % acc_test_watermark_finetune)
+    if args.attack =="distillation":
+        acc_test_clean_distill, acc_test_watermark_distill = run_distillation_attack(
+            args, attack_model, sub_model, train_graphs, test_graphs, test_backdoor, bkd_dr_test, num_classes, device
+        )
     
-    # doesn't act as expected... MA stays always the same... As if the perturbation wouldn't affect the performance
-    # ...
-    elif "layerperturb" in attacks : 
-        # TODO
-        acc_test_clean_perturb = 0
-        acc_test_watermark_perturb = 0
-        pass
+    elif args.attack=="finetuning":
+        acc_test_clean_finetune, acc_test_watermark_finetune = run_finetuning_attack(
+            args, attack_model, train_graphs, test_graphs, test_backdoor, bkd_dr_test, num_classes, sub_model, tag2index, device
+        )
+        
+    elif args.attack == "layerperturb": 
+        acc_test_clean_perturb, acc_test_watermark_perturb = run_layerperturb_attack(
+            args, attack_model, clean_model, sub_model, test_graphs, test_backdoor, bkd_dr_test, tag2index, device
+        )
+        
+    elif args.attack == "suppression_online":
+        acc_test_clean, acc_test_watermark = run_malicious_training(
+        args, attack_model, sub_model,
+        train_graphs, test_graphs, test_backdoor, bkd_dr_test, tag2index, device,
+        optimizer_D, optimizer_G, generator,
+        bkd_gids_train, Ainput_train, Xinput_train, nodenums_id, nodemax, num_classes
+    )
+
+
     
     elif args.attack == "none":
         # No attack, already evaluated in the previous section
@@ -772,6 +344,10 @@ def main():
         elif args.attack == "layerperturb":
             attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_perturb}\n")
             attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_perturb}\n")
+        elif args.attack == "suppression_online":
+            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean:.6f}\n")
+            attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark:.6f}\n")
+
         elif args.attack == "none":
             attack_file.write(f"Clean Accuracy (MA): {acc_test_clean}\n")
             attack_file.write(f"Watermark Accuracy (WA): {test_watermark}\n")
