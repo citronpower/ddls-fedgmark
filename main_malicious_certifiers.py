@@ -32,6 +32,15 @@ def main():
     # Note: Hyper-parameters need to be tuned in order to obtain results reported in the paper.
     parser = argparse.ArgumentParser(
         description='PyTorch graph convolutional neural net for whole-graph classification')
+    
+    # MALICIOUS CERTIFICATION
+    # If we are simulating malicious clients, we need to create a set of malicious certifiers
+    # that will lie during the certification phase
+    parser.add_argument('--certify_attack', action='store_true', default=False,
+                    help='Simulate malicious clients lying during certification phase')
+    parser.add_argument('--malicious_certifiers_frac', type=float, default=1,
+                        help='Fraction of clients faking watermarked data during certification if certify_attack is enabled')
+    
     parser.add_argument('--port', type=str, default="acm4",
                         help='name of sever')
     parser.add_argument('--dataset', type=str, default="MUTAG",
@@ -118,7 +127,7 @@ def main():
                         help='output file')
     parser.add_argument('--filenamebd', type=str, default="output_bd",
                         help='output backdoor file')
-    parser.add_argument('--malicious_frac', type=float, default=0.3,
+    parser.add_argument('--malicious_frac', type=float, default=1,#0.3,
                     help='Fraction of malicious clients that suppress watermark (0-1)')
 
     args = parser.parse_args()
@@ -163,10 +172,6 @@ def main():
     
     Ainput_test, Xinput_test = gen_input(test_graphs_trigger, test_backdoor, nodemax) 
     
-    ma_list = []
-    wa_list = []
-    eval_epochs = []
-
     with open(args.filenamebd, 'w+') as f: # Useless file, it is not used
         f.write("acc\n")
         bkd_gids_train = {}
@@ -227,10 +232,11 @@ def main():
             
             for sch_i in range(args.T):
                 scheduler_sub[sch_i].step() 
-            global_weights = average_weights(local_weights)   
+            global_weights = average_weights(local_weights)
             global_model.load_state_dict(global_weights) # Update global model with the average weights of the submodels
             #----------------- Evaluation -----------------#
             if epoch % args.n_test == 0: # Each n_test epoch, we print the current accuracies (MA + WA)
+
                 global_to_sub(global_model, sub_model)
                 id = 0
                 args.is_test = 1
@@ -276,101 +282,101 @@ def main():
                 test_watermark = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
                 print("accuracy test watermark (WA): %f" % test_watermark)
 
-                ma_list.append(acc_test_clean)
-                wa_list.append(test_watermark)
-                eval_epochs.append(epoch)
                 f.flush()
             #scheduler.step()  
+
+
+        # ============================================
+        # ==== OWNERSHIP CERTIFICATION SIMULATION ====
+        # ============================================
+
+        if args.certify_attack:
+            print("\n\n=== FINAL OWNERSHIP CERTIFICATION PHASE (with malicious certifiers) ===")
+
+            # global_to_sub(global_model, sub_model)  # Sync models
+            # args.is_test = 1
+            nodenums_test = [len(test_graphs[idx].g.adj) for idx in range(len(test_graphs))]
+
+            # Choose malicious certifiers
+            print(f'Number of watermarking clients: {args.num_corrupt}')
+            print(f'Number of malicious certifiers: {args.malicious_frac * args.num_corrupt}')
+            num_malicious_certifiers = int(args.malicious_frac * args.num_corrupt)
+            malicious_certifiers = set(np.random.choice(range(args.num_corrupt), num_malicious_certifiers, replace=False))
+            print(f"Malicious certifiers (lying during final certification): {malicious_certifiers}")
+
+            for id in range(args.num_corrupt):
+                print(f"\nTesting certification accuracy for client {id}:")
+
+                if id in malicious_certifiers:
+                    print(f"[!] Client {id} is malicious: submitting clean data as if watermarked.")
+                    bkd_dr_ = [test_graphs[idx] for idx in test_backdoor]  # Clean graphs claimed to be watermarked
+                    bkd_dr_ = [test_graphs[idx] for idx in test_backdoor if test_graphs[idx].label != args.target]  # Hardcore version: return only clean graphs that have specifically not the target label
+
+                else:
+                    # === Honest certifier generates real watermarked graphs ===
+                    # This part is a copy-paste from the normal testing phase
+                    generator[id].eval()
+                    graphs = copy.deepcopy(test_graphs)  # Start from clean test graphs
+
+                    bkd_nid_groups = {}
+                    for gid in test_backdoor:
+                        if nodenums_test[gid] >= args.triggersize:
+                            bkd_nid_groups[gid] = np.random.choice(nodenums_test[gid], args.triggersize, replace=False)
+                        else:
+                            bkd_nid_groups[gid] = np.random.choice(nodenums_test[gid], args.triggersize, replace=True)
+
+                    init_dr = init_trigger(args, graphs, test_backdoor, bkd_nid_groups, 0.0)
+                    bkd_dr = copy.deepcopy(init_dr)
+
+                    topomask, featmask = gen_mask(
+                        graphs[0].node_features.shape[1], nodemax, bkd_dr, test_backdoor, bkd_nid_groups
+                    )
+                    Ainput_trigger, Xinput_trigger = gen_input(bkd_dr, test_backdoor, nodemax)
+
+                    bkd_dr_test, bkd_nid_groups_test, _, _, rst_bkdA = generator[id](
+                        args, id, graphs, bkd_dr, Ainput_trigger, topomask, bkd_nid_groups,
+                        test_backdoor, Ainput_test, Xinput_test, nodenums_test,
+                        nodemax, args.is_Customized, args.is_test, args.triggersize,
+                        device=torch.device('cpu'), binaryfeat=False
+                    )
+
+                    # === Apply structure perturbation to graphs ===
+                    for gid in test_backdoor:
+                        bkd_dr_test[gid].edge_mat = torch.add(
+                            init_dr[gid].edge_mat, rst_bkdA[gid][:nodenums_test[gid], :nodenums_test[gid]]
+                        )
+                        for i in range(nodenums_test[gid]):
+                            for j in range(nodenums_test[gid]):
+                                if rst_bkdA[gid][i][j] == 1:
+                                    bkd_dr_test[gid].g.add_edge(i, j)
+
+                        bkd_dr_test[gid].node_tags = list(dict(bkd_dr_test[gid].g.degree).values())
+
+                    for gid in test_backdoor:
+                        for i in bkd_nid_groups_test[gid]:
+                            for j in bkd_nid_groups_test[gid]:
+                                if i != j:
+                                    bkd_dr_test[gid].edge_mat[i][j] = 1
+                                    if (i, j) not in bkd_dr_test[gid].g.edges():
+                                        bkd_dr_test[gid].g.add_edge(i, j)
+                        bkd_dr_test[gid].node_tags = list(dict(bkd_dr_test[gid].g.degree).values())
+
+                    bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]  # Only watermarked subset
+
+                # === Ensemble Testing ===
+                acc_clean = test_ensemble(args, sub_model, device, test_graphs, tag2index)
+                print("accuracy test clean (MA): %f" % acc_clean)
+
+                test_watermark = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
+                print("accuracy test watermark (WA): %f" % test_watermark)
+
+
 
     f = open('./saved_model/' + str(args.graphtype) + '_' + str(args.dataset) + '_' + str(
             args.frac) + '_triggersize_' + str(args.triggersize), 'wb')
 
     pickle.dump(global_model, f)
     f.close()
-
-    plt.figure(figsize=(10, 6))
-    plt.plot(eval_epochs, ma_list, label='MA (Main Accuracy)', marker='o')
-    plt.plot(eval_epochs, wa_list, label='WA (Watermarked Accuracy)', marker='s')
-    plt.xlabel('Epoch')
-    plt.ylabel('Accuracy')
-    plt.title('Model Accuracy (MA & WA) over training')
-    plt.legend()
-    plt.grid(True)
-    plt.tight_layout()
-    plt.savefig('ma_wa_accuracy_plot.png')  # Save the plot
-    plt.show()  # Display the plot
-
-
-    #----------------- Evaluation under attack -----------------#
-    
-    print("Evaluating model under attacks...")
-    
-    # Create a copy of the global model for attack testing
-    attack_model = copy.deepcopy(global_model)
-    
-    clean_model = Discriminatort(
-        args, args.num_layers, args.num_mlp_layers, 
-        train_graphs[0][0].node_features.shape[1],
-        args.hidden_dim, num_classes,
-        args.final_dropout, args.learn_eps,
-        args.graph_pooling_type, args.neighbor_pooling_type,
-        device
-    ).to(device)
-    
-    # Test different types of attacks based on args.attack parameter
-    
-    if args.attack =="distillation":
-        acc_test_clean_distill, acc_test_watermark_distill = run_distillation_attack(
-            args, attack_model, sub_model, train_graphs, test_graphs, test_backdoor, bkd_dr_test, num_classes, device
-        )
-    
-    elif args.attack=="finetuning":
-        acc_test_clean_finetune, acc_test_watermark_finetune = run_finetuning_attack(
-            args, attack_model, train_graphs, test_graphs, test_backdoor, bkd_dr_test, num_classes, sub_model, tag2index, device
-        )
-        
-    elif args.attack == "layerperturb": 
-        acc_test_clean_perturb, acc_test_watermark_perturb = run_layerperturb_attack(
-            args, attack_model, clean_model, sub_model, test_graphs, test_backdoor, bkd_dr_test, tag2index, device
-        )
-        
-    elif args.attack == "falsification":
-        acc_test_clean, acc_test_watermark = run_malicious_training(
-        args, attack_model, sub_model,
-        train_graphs, test_graphs, test_backdoor, bkd_dr_test, tag2index, device,
-        optimizer_D, optimizer_G, generator,
-        bkd_gids_train, Ainput_train, Xinput_train, nodenums_id, nodemax, num_classes
-    )
-
-
-    
-    elif args.attack == "none":
-        # No attack, already evaluated in the previous section
-        print("No attack performed, using previous evaluation results")
-    
-    else:
-        print(f"Unknown attack type: {args.attack}")
-    
-    # Write attack results to file
-    with open(args.filename + "_attack_" + args.attack + ".txt", 'w') as attack_file:
-        attack_file.write("Attack Type: " + args.attack + "\n")
-        if args.attack == "distillation":
-            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_distill}\n")
-            attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_distill}\n")
-        elif args.attack == "finetuning":
-            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_finetune}\n")
-            attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_finetune}\n")
-        elif args.attack == "layerperturb":
-            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean_perturb}\n")
-            attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark_perturb}\n")
-        elif args.attack == "falsification":
-            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean:.6f}\n")
-            attack_file.write(f"Watermark Accuracy (WA): {acc_test_watermark:.6f}\n")
-
-        elif args.attack == "none":
-            attack_file.write(f"Clean Accuracy (MA): {acc_test_clean}\n")
-            attack_file.write(f"Watermark Accuracy (WA): {test_watermark}\n")
-
 
 if __name__ == '__main__':
     main()
