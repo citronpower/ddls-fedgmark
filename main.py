@@ -320,8 +320,11 @@ def main():
     # Test different types of attacks based on args.attack parameter
     
     if args.attack =="distillation":
+        # acc_test_clean_distill, acc_test_watermark_distill = run_distillation_attack(
+        #     args, attack_model, sub_model, train_graphs, test_graphs, test_backdoor, bkd_dr_test, num_classes, device
+        # )
         acc_test_clean_distill, acc_test_watermark_distill = run_distillation_attack(
-            args, attack_model, sub_model, train_graphs, test_graphs, test_backdoor, bkd_dr_test, num_classes, device
+            args, attack_model, sub_model, train_graphs, test_graphs, test_backdoor, bkd_dr_test, num_classes, device, tag2index
         )
     
     elif args.attack=="finetuning":
