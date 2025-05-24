@@ -460,9 +460,7 @@ def main():
 
             if id in malicious_clients:
                 print(f"[!] Client {id} is malicious: submitting clean data as if watermarked.")
-                bkd_dr_ = [test_graphs[idx] for idx in test_backdoor]  # Clean graphs claimed to be watermarked
-                bkd_dr_ = [test_graphs[idx] for idx in test_backdoor if test_graphs[idx].label != args.target]  # Hardcore version: return only clean graphs that have specifically not the target label
-
+                bkd_dr_ = [test_graphs[idx] for idx in test_backdoor] 
             else:
                 # === Honest certifier generates real watermarked graphs ===
                 # This part is a copy-paste from the normal testing phase
