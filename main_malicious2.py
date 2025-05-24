@@ -162,6 +162,12 @@ def main():
                         choices=['random', 'clean'],
                         help='Type of malicious behavior: random (random watermark) or clean (no watermark)')
 
+    # For malicious client simulation, Malicious vertifier 
+    parser.add_argument('--certify_attack', action='store_true', default=False,
+                    help='Simulate malicious clients lying during certification phase')
+    # parser.add_argument('--malicious_certifiers_frac', type=float, default=0, # Ideally, set it with the same value as --malicious_frac
+    #                     help='Fraction of clients faking watermarked data during certification if certify_attack is enabled')
+
     args = parser.parse_args()
 
     cpu = torch.device('cpu')
@@ -381,7 +387,7 @@ def main():
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(f'ma_wa_accuracy_plot_{args.dataset}_with_{args.attack}_attack_and_malicious_{args.malicious_frac}_{args.malicious_type}.png')  # Save the plot
+    plt.savefig(f'ma_wa_accuracy_plot_{args.dataset}_with_{args.attack}_attack_and_malicious_{args.malicious_frac}_{args.malicious_type}_and_certify_attack_{args.certify_attack}.png')  # Save the plot
     plt.show()  # Display the plot
 
 
@@ -430,8 +436,94 @@ def main():
     else:
         print(f"Unknown attack type: {args.attack}")
     
+
+    # ============================================
+    # ==== OWNERSHIP CERTIFICATION SIMULATION ====
+    # ============================================
+
+    if args.certify_attack:
+        print("\n\n=== FINAL OWNERSHIP CERTIFICATION PHASE (with malicious certifiers) ===")
+
+        # global_to_sub(global_model, sub_model)  # Sync models
+        # args.is_test = 1
+        nodenums_test = [len(test_graphs[idx].g.adj) for idx in range(len(test_graphs))]
+
+        # Choose malicious certifiers
+        print(f'Number of watermarking clients: {args.num_corrupt}')
+        print(f'Number of malicious certifiers: {args.malicious_frac * args.num_corrupt}')
+        # num_malicious_certifiers = int(args.malicious_frac * args.num_corrupt)
+        # malicious_clients = set(np.random.choice(range(args.num_corrupt), num_malicious_certifiers, replace=False))
+        print(f"Malicious certifiers (lying during final certification): {malicious_clients}")
+
+        for id in range(args.num_corrupt):
+            print(f"\nTesting certification accuracy for client {id}:")
+
+            if id in malicious_clients:
+                print(f"[!] Client {id} is malicious: submitting clean data as if watermarked.")
+                bkd_dr_ = [test_graphs[idx] for idx in test_backdoor]  # Clean graphs claimed to be watermarked
+                bkd_dr_ = [test_graphs[idx] for idx in test_backdoor if test_graphs[idx].label != args.target]  # Hardcore version: return only clean graphs that have specifically not the target label
+
+            else:
+                # === Honest certifier generates real watermarked graphs ===
+                # This part is a copy-paste from the normal testing phase
+                generator[id].eval()
+                graphs = copy.deepcopy(test_graphs) 
+
+                bkd_nid_groups = {}
+                for gid in test_backdoor:
+                    if nodenums_test[gid] >= args.triggersize:
+                        bkd_nid_groups[gid] = np.random.choice(nodenums_test[gid], args.triggersize, replace=False)
+                    else:
+                        bkd_nid_groups[gid] = np.random.choice(nodenums_test[gid], args.triggersize, replace=True)
+
+                init_dr = init_trigger(args, graphs, test_backdoor, bkd_nid_groups, 0.0)
+                bkd_dr = copy.deepcopy(init_dr)
+
+                topomask, featmask = gen_mask(
+                    graphs[0].node_features.shape[1], nodemax, bkd_dr, test_backdoor, bkd_nid_groups
+                )
+                Ainput_trigger, Xinput_trigger = gen_input(bkd_dr, test_backdoor, nodemax)
+
+                bkd_dr_test, bkd_nid_groups_test, _, _, rst_bkdA = generator[id](
+                    args, id, graphs, bkd_dr, Ainput_trigger, topomask, bkd_nid_groups,
+                    test_backdoor, Ainput_test, Xinput_test, nodenums_test,
+                    nodemax, args.is_Customized, args.is_test, args.triggersize,
+                    device=torch.device('cpu'), binaryfeat=False
+                )
+
+                for gid in test_backdoor:
+                    bkd_dr_test[gid].edge_mat = torch.add(
+                        init_dr[gid].edge_mat, rst_bkdA[gid][:nodenums_test[gid], :nodenums_test[gid]]
+                    )
+                    for i in range(nodenums_test[gid]):
+                        for j in range(nodenums_test[gid]):
+                            if rst_bkdA[gid][i][j] == 1:
+                                bkd_dr_test[gid].g.add_edge(i, j)
+
+                    bkd_dr_test[gid].node_tags = list(dict(bkd_dr_test[gid].g.degree).values())
+
+                for gid in test_backdoor:
+                    for i in bkd_nid_groups_test[gid]:
+                        for j in bkd_nid_groups_test[gid]:
+                            if i != j:
+                                bkd_dr_test[gid].edge_mat[i][j] = 1
+                                if (i, j) not in bkd_dr_test[gid].g.edges():
+                                    bkd_dr_test[gid].g.add_edge(i, j)
+                    bkd_dr_test[gid].node_tags = list(dict(bkd_dr_test[gid].g.degree).values())
+
+                bkd_dr_ = [bkd_dr_test[idx] for idx in test_backdoor]
+
+            # === Ensemble Testing ===
+            acc_clean = test_ensemble(args, sub_model, device, test_graphs, tag2index)
+            print("accuracy test clean (MA): %f" % acc_clean)
+
+            test_watermark = test_ensemble(args, sub_model, device, bkd_dr_, tag2index)
+            print("accuracy test watermark (WA): %f" % test_watermark)    
+
+
     # Write attack results to file
-    with open(args.filename + "_attack_" + args.attack + f"_malicious_{args.malicious_frac}_{args.malicious_type}.txt", 'w') as attack_file:
+    # {args.dataset}_with_{args.attack}_attack_and_malicious_{args.malicious_frac}_{args.malicious_type}
+    with open(f"{args.filename}_{args.dataset}_with_{args.attack}_attack_and__malicious_{args.malicious_frac}_{args.malicious_type}_and_certify_attack_{args.certify_attack}.txt", 'w') as attack_file:
         attack_file.write("Attack Type: " + args.attack + "\n")
         attack_file.write(f"Malicious clients: {num_malicious}/{args.num_corrupt} ({args.malicious_frac*100:.1f}%)\n")
         attack_file.write(f"Malicious behavior: {args.malicious_type}\n")
