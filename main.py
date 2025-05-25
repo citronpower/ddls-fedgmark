@@ -332,9 +332,20 @@ def main():
             args, attack_model, train_graphs, test_graphs, test_backdoor, bkd_dr_test, num_classes, sub_model, tag2index, device
         )
         
-    elif args.attack == "layerperturb": 
-        acc_test_clean_perturb, acc_test_watermark_perturb = run_layerperturb_attack(
-            args, attack_model, clean_model, sub_model, test_graphs, test_backdoor, bkd_dr_test, tag2index, device
+    elif args.attack == "layerperturb":
+    # Définir les couches à perturber (par défaut les premières couches de prediction)
+        layers_to_replace = [
+            f"linears_prediction.{i}" for i in range(args.perturb_depth)
+        ]
+
+        # Exécuter l’attaque
+        perturbed_model, acc_test_clean_lp, acc_test_watermark_lp = run_layerperturb_attack(
+            model_w=attack_model,
+            model_clean=clean_model,
+            test_graphs=test_graphs,
+            watermark_graphs=bkd_dr_test,
+            device=device,
+            layers_to_replace=layers_to_replace
         )
         
     elif args.attack == "falsification":
